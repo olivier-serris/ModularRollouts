@@ -1,3 +1,0 @@
-[submodule "IsaacGymEnvs"]
-	path = modular_rollouts/IsaacGymEnvs
-	url = https://github.com/NVIDIA-Omniverse/IsaacGymEnvs
