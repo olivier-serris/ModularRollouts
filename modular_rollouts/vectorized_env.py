@@ -141,7 +141,9 @@ class OOP_VecEnv(VectorEnvWrapper):
             or issubclass(action_type, np.ndarray)
             or issubclass(action_type, chex.Array)
         ), f"Unknown action type : {action_type}"
-
+        self.env_engine = env_engine
+        self.env_name = env_name
+        self.action_type = action_type
         if env_engine == "brax":
             env = create_brax_env(
                 env_name, self.n_pop, self.n_env, self.max_steps, self.seed, **kwargs
@@ -204,3 +206,7 @@ class OOP_VecEnv(VectorEnvWrapper):
             return 1
         else:
             return shape[0]
+
+    def __del__(self):
+        if self.env_engine != "isaac":
+            return self.unwrapped.__del__()

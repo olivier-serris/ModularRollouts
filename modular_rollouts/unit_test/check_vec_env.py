@@ -8,7 +8,7 @@ import sys, os
 
 sys.path.append(os.getcwd())
 import os
-from hydra import compose, initialize
+from hydra import initialize
 
 import multiprocessing
 from multiprocessing import Process
@@ -16,7 +16,7 @@ from modular_rollouts.IsaacGymEnvs.utils import get_isaac_cfg
 from modular_rollouts.vectorized_env import OOP_VecEnv
 
 
-def launch_in_process(function, use_main_process=False, **kwargs):
+def launch_in_process(function, use_main_process=True, **kwargs):
     # Creating an ISAAC env twice ina row is currently bugged.
     # Launching in a subprocess ensure that memory is cleaned
     # Also usefull to clean memory  occupied by JAX
@@ -26,14 +26,14 @@ def launch_in_process(function, use_main_process=False, **kwargs):
         p = Process(target=function, kwargs=kwargs)
         p.start()
         p.join()
-        if p.exitcode > 0:
+        if p.exitcode != 0:
             raise ValueError(f"a process exited with code {p.exitcode}")
 
 
 class AllCombination:
     n_pop = 4
     n_env = 2
-    n_step = 100
+    max_steps = None
     seed = 0
     hidden_sizes = [10, 10]
 
@@ -48,7 +48,7 @@ class AllCombination:
         env = OOP_VecEnv(
             n_pop=self.n_pop,
             n_env=self.n_env,
-            n_step=self.n_step,
+            max_steps=self.max_steps,
             seed=self.seed,
             device="cuda",
         )
@@ -61,7 +61,6 @@ class AllCombination:
 
         env.reset()
         for _ in range(10):
-            # action =  env.step(env.action_space.sample())
             action = env.action_space.sample()  # TODO: check how to handle this
             if issubclass(action_type, chex.Array):
                 action = jnp.array(action)
@@ -129,9 +128,9 @@ if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
     initialize(config_path="configs/", job_name="get_isaac_cfg")
     debug = AllCombination()
-    debug.test_gym_torch()
-    debug.test_gym_jax()
-    debug.test_brax_torch()
-    debug.test_brax_jax()
+    # debug.test_gym_torch()
+    # debug.test_gym_jax()
+    # debug.test_brax_torch()
+    # debug.test_brax_jax()
     debug.test_isaac_torch()
-    debug.test_isaac_jax()
+    # debug.test_isaac_jax()
