@@ -1,0 +1,3 @@
+[submodule "modular_rollouts/IsaacGymEnvs"]
+	path = modular_rollouts/IsaacGymEnvs
+	url = https://github.com/olivier-serris/IsaacGymEnvs.git
