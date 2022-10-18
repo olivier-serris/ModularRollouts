@@ -3,10 +3,6 @@ import torch
 import chex
 import jax.numpy as jnp
 
-# TODO : Remove this, create + install module.
-import sys, os
-
-sys.path.append(os.getcwd())
 import os
 from hydra import initialize
 
@@ -16,7 +12,7 @@ from modular_rollouts.IsaacGymEnvs.utils import get_isaac_cfg
 from modular_rollouts.vectorized_env import OOP_VecEnv
 
 
-def launch_in_process(function, use_main_process=True, **kwargs):
+def launch_in_process(function, use_main_process=False, **kwargs):
     # Creating an ISAAC env twice ina row is currently bugged.
     # Launching in a subprocess ensure that memory is cleaned
     # Also usefull to clean memory  occupied by JAX
@@ -60,7 +56,7 @@ class AllCombination:
         )
 
         env.reset()
-        for _ in range(10):
+        for _ in range(10000):
             action = env.action_space.sample()  # TODO: check how to handle this
             if issubclass(action_type, chex.Array):
                 action = jnp.array(action)
@@ -102,7 +98,8 @@ class AllCombination:
         )
 
     def test_isaac_torch(self):
-        env_name = "Cartpole"
+        # env_name = "FrankaCabinet"
+        env_name = "FrankaCubeStack"
         task_cfg = get_isaac_cfg(env_name)
         launch_in_process(
             self.check_env,
@@ -110,6 +107,8 @@ class AllCombination:
             env_engine="isaac",
             action_type=torch.Tensor,
             cfg=task_cfg,
+            headless=False,
+            force_render=True,
         )
 
     def test_isaac_jax(self):
@@ -133,4 +132,4 @@ if __name__ == "__main__":
     # debug.test_brax_torch()
     # debug.test_brax_jax()
     debug.test_isaac_torch()
-    # debug.test_isaac_jax()
+    debug.test_isaac_jax()

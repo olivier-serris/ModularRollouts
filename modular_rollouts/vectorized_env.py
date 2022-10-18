@@ -1,5 +1,6 @@
 from typing import TypeVar
 from typing import Union
+import multiprocessing
 import gym
 import torch
 import numpy as np
@@ -11,11 +12,28 @@ from gym.vector import VectorEnvWrapper
 from modular_rollouts.wrappers import (
     ReshapeWrapper,
     DataConversionWrapper,
-    IsaacToGymWrapper,
+    BraxToVectorGymWrapper,
+    # IsaacToGymWrapper,
 )
 from omegaconf import DictConfig
 
 Vector = TypeVar("Vector")
+
+
+def create_envpool_env(
+    env_name: str, n_pop: int, n_env: int, max_steps: int, seed: int, **kwargs
+):
+    try:
+        import envpool
+    except ModuleNotFoundError:
+        raise Exception(
+            "You need to install isaacgym: \https://github.com/sail-sg/envpool"
+        )
+    num_cpu = multiprocessing.cpu_count()
+    num_threads = min(num_cpu, n_env * max_steps)
+    env = envpool.make(
+        env_name, env_type="gym", num_envs=n_env * n_pop, num_threads=num_threads
+    )
 
 
 def create_brax_env(
@@ -34,10 +52,10 @@ def create_brax_env(
         env = brax_wrappers.EpisodeWrapper(env, max_steps, action_repeat=action_repeat)
     env = brax_wrappers.AutoResetWrapper(env)
     env = brax_wrappers.VectorWrapper(env, n_env * n_pop)
-    env = brax_wrappers.VectorGymWrapper(env, seed=seed)
-    env = ReshapeWrapper(
-        env, in_reshape=(n_pop * n_env, -1), out_reshape=(n_pop, n_env, -1)
-    )
+    env = BraxToVectorGymWrapper(env, seed=seed)
+    # env = ReshapeWrapper(
+    #     env, in_reshape=(n_pop * n_env, -1), out_reshape=(n_pop, n_env, -1)
+    # )
     return env
 
 
@@ -49,11 +67,14 @@ def create_isaac_env(
     seed: int,
     cfg: DictConfig,
     device: str,
+    headless=True,
+    force_render=False,
 ):
     try:
         from modular_rollouts.IsaacGymEnvs.isaacgymenvs.tasks import (
             isaacgym_task_map,
         )
+        from modular_rollouts.wrappers import IsaacToGymWrapper
     except ModuleNotFoundError:
         raise Exception(
             "You need to install isaacgym: \nhttps://developer.nvidia.com/isaac-gym"
@@ -67,36 +88,35 @@ def create_isaac_env(
         rl_device=device,
         sim_device=device,
         graphics_device_id=0,
-        headless=True,
+        headless=headless,
         virtual_screen_capture=False,
-        force_render=False,
+        force_render=force_render,
     )
-    env = IsaacToGymWrapper(env)
-    if n_pop * n_env > 1:
-        env = ReshapeWrapper(
-            env, in_reshape=(n_pop * n_env, -1), out_reshape=(n_pop, n_env, -1)
-        )
+    env = IsaacToGymWrapper(env, n_pop * n_env)
+    # if n_pop * n_env > 1:
+    #     env = ReshapeWrapper(
+    #         env, in_reshape=(n_pop * n_env, -1), out_reshape=(n_pop, n_env, -1)
+    #     )
     return env
 
 
 def create_gym_env(
-    env_name: str, n_pop: int, n_env: int, max_steps: int, seed: int, **kwargs
+    env_name: str,
+    n_pop: int,
+    n_env: int,
+    max_steps: int,
+    seed: int,
+    render_mode: str = None,
+    **kwargs,
 ):
     env = gym.vector.make(
         env_name,
         num_envs=n_pop * n_env,
         asynchronous=False,
-        autoreset=True,
-        max_episode_steps=max_steps,
+        # autoreset=True,
+        # max_episode_steps=max_steps,
+        # render_mode=render_mode,
     )
-    action_dim = env.single_action_space.shape
-    in_size = [n_pop * n_env] + list(action_dim)
-    env = ReshapeWrapper(
-        env,
-        in_reshape=(in_size),
-        out_reshape=(n_pop, n_env, -1),
-    )
-    env.seed(seed)
     return env
 
 
@@ -162,18 +182,25 @@ class OOP_VecEnv(VectorEnvWrapper):
                 seed=self.seed,
                 **kwargs,
             )
-        obs_type = get_obs_type(env.reset())
+        obs, info = env.reset()
+        obs_type = get_obs_type(obs)
+        if self.n_pop > 1:
+            in_shape = [self.n_pop * self.n_env] + list(env.single_action_space.shape)
+            env = ReshapeWrapper(
+                env,
+                in_reshape=in_shape,
+                out_reshape=(self.n_pop, self.n_env, -1),
+            )
+
         env = add_data_conversion_wrappers(obs_type, action_type, env, self.device)
         self.env: Union[VectorGymWrapper, gym.vector.VectorEnv] = env
 
-    def reset(self):
-        self.last_obs = self.env.reset()
+    def reset(self, seed=None):
+        self.last_obs = self.env.reset(seed=seed)
+        return self.last_obs
 
     def step(self, actions):
-        next_obs, reward, done, info = self.env.step(
-            actions.reshape(self.n_pop, self.n_env, -1)
-        )
-        return next_obs, reward, done, info
+        return self.env.step(actions)
 
     # Additional helper properties :
     @property
