@@ -9,6 +9,7 @@ from brax.envs.wrappers import VectorGymWrapper
 from brax import envs as brax_env
 from brax.envs import wrappers as brax_wrappers
 from gym.vector import VectorEnvWrapper
+from gym.wrappers.rescale_action import RescaleAction
 from modular_rollouts.wrappers import (
     ReshapeWrapper,
     DataConversionWrapper,
@@ -27,7 +28,7 @@ def create_envpool_env(
         import envpool
     except ModuleNotFoundError:
         raise Exception(
-            "You need to install isaacgym: \https://github.com/sail-sg/envpool"
+            "You need to install envpool: \https://github.com/sail-sg/envpool"
         )
     num_cpu = multiprocessing.cpu_count()
     num_threads = min(num_cpu, n_env * max_steps)
@@ -50,12 +51,10 @@ def create_brax_env(
 
     if max_steps is not None:
         env = brax_wrappers.EpisodeWrapper(env, max_steps, action_repeat=action_repeat)
-    env = brax_wrappers.AutoResetWrapper(env)
     env = brax_wrappers.VectorWrapper(env, n_env * n_pop)
+    # CAREFULL : the current brax autoreset, resets without randomness.
+    env = brax_wrappers.AutoResetWrapper(env)
     env = BraxToVectorGymWrapper(env, seed=seed)
-    # env = ReshapeWrapper(
-    #     env, in_reshape=(n_pop * n_env, -1), out_reshape=(n_pop, n_env, -1)
-    # )
     return env
 
 
@@ -113,14 +112,13 @@ def create_gym_env(
         env_name,
         num_envs=n_pop * n_env,
         asynchronous=False,
-        # autoreset=True,
-        # max_episode_steps=max_steps,
+        max_episode_steps=max_steps,
         # render_mode=render_mode,
     )
     return env
 
 
-def add_data_conversion_wrappers(env_data_type, actor_data_type, env, device):
+def add_wrappers(env_data_type, actor_data_type, env, device):
     """Add a wrapper that automaticaly handles vector conversions (Numpy / Pytorch / JAX).
     The action given by the aent is converted to the right data type for the env.
     The output of the env is converted to the right data type for the agent.
@@ -130,6 +128,13 @@ def add_data_conversion_wrappers(env_data_type, actor_data_type, env, device):
     """
     if env_data_type != actor_data_type:
         env = DataConversionWrapper(env, env_data_type, actor_data_type, device=device)
+
+    # # if action is not in the [-1,1] range, rescale to that range
+    # if isinstance(env.action_space, gym.spaces.Box) and not (
+    #     np.allclose(env.action_space.low, -np.ones_like(env.action_space.low))
+    #     and np.allclose(env.action_space.high, np.ones_like(env.action_space.low))
+    # ):
+    #     env = RescaleAction(env, min_actions=-1, max_actions=1)
     return env
 
 
@@ -192,7 +197,8 @@ class OOP_VecEnv(VectorEnvWrapper):
                 out_reshape=(self.n_pop, self.n_env, -1),
             )
 
-        env = add_data_conversion_wrappers(obs_type, action_type, env, self.device)
+        env = add_wrappers(obs_type, action_type, env, self.device)
+
         self.env: Union[VectorGymWrapper, gym.vector.VectorEnv] = env
 
     def reset(self, seed=None):

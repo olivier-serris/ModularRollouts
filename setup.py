@@ -8,6 +8,10 @@ requirements = [
     "matplotlib>=3.3.4",
     "omegaconf",
     "hydra-core",
+    "gym",
+    "torch",
+    "brax",
+    "mujoco",
 ]
 setup(
     name="modular rollouts",

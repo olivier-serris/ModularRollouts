@@ -1,7 +1,7 @@
 # mandatory imports :
 from distutils.log import info
 import sys
-from typing import Dict, Optional, Union, ClassVar
+from typing import Callable, Dict, Optional, Union, ClassVar
 from typing import Sequence, Union, SupportsIndex
 import numpy as np
 import gym
@@ -243,7 +243,7 @@ class BraxToVectorGymWrapper(gym.vector.VectorEnv):
     # `_reset` as signs of a deprecated gym Env API.
     _gym_disable_underscore_compat: ClassVar[bool] = True
 
-    def __init__(self, env: brax_env.Env, seed: int = 0, backend: Optional[str] = None):
+    def __init__(self, env: brax_env.Env, seed: int = 0):
         self._env = env
         self.metadata = {
             "render.modes": ["human", "rgb_array"],
@@ -254,7 +254,6 @@ class BraxToVectorGymWrapper(gym.vector.VectorEnv):
 
         self.num_envs = self._env.batch_size
         self.seed(seed)
-        self.backend = backend
         self._state = None
 
         obs_high = jp.inf * jp.ones(self._env.observation_size, dtype="float32")
@@ -274,30 +273,26 @@ class BraxToVectorGymWrapper(gym.vector.VectorEnv):
             state = self._env.reset(key2)
             return state, state.obs, key1
 
-        self._reset = jax.jit(reset, backend=self.backend)
+        self._reset = jax.jit(reset)
 
         def step(state, action):
             state = self._env.step(state, action)
             info = {**state.metrics, **state.info}
-            return state, state.obs, state.reward, state.done, info
+            truncated = self._state.info.get("truncation", jnp.zeros_like(state.reward))
+            terminated = jnp.logical_and(state.done, 1 - truncated)
+            return state, state.obs, state.reward, terminated, truncated, info
 
-        self._step = jax.jit(step, backend=self.backend)
+        self._step = jax.jit(step)
 
     def reset(self, **kwargs):
+        # strange that no info can be passed on during reset
         self._state, obs, self._key = self._reset(self._key)
-        return obs, {}  # strange that no info can be passed on during reset
+        return obs, {}
 
     def step(self, action):
-        self._state, obs, reward, done, info = self._step(self._state, action)
-        truncated = self._state.info.get("truncated", jnp.zeros_like(reward))
-        # truncated = jax.lax.cond(
-        #     "truncated" in self._state.info,
-        #     (),
-        #     lambda _: self._state.info["truncated"],
-        #     (),
-        #     lambda _: jnp.zeros_like(reward),
-        # )
-        terminated = jnp.logical_and(done, 1 - truncated)
+        self._state, obs, reward, terminated, truncated, info = self._step(
+            self._state, action
+        )
         return obs, reward, terminated, truncated, info
 
     def seed(self, seed: int = 0):
@@ -313,3 +308,80 @@ class BraxToVectorGymWrapper(gym.vector.VectorEnv):
             return image.render_array(sys, qp, 256, 256)
         else:
             return super().render(mode=mode)  # just raise an exception
+
+
+class RescaleAction(gym.ActionWrapper):
+    """Affinely rescales the continuous action space of the environment to the range [min_action, max_action].
+
+    The base environment :attr:`env` must have an action space of type :class:`spaces.Box`. If :attr:`min_action`
+    or :attr:`max_action` are numpy arrays, the shape must match the shape of the environment's action space.
+
+    Example:
+        >>> import gym
+        >>> env = gym.make('BipedalWalker-v3')
+        >>> env.action_space
+        Box(-1.0, 1.0, (4,), float32)
+        >>> min_action = -0.5
+        >>> max_action = np.array([0.0, 0.5, 1.0, 0.75])
+        >>> env = RescaleAction(env, min_action=min_action, max_action=max_action)
+        >>> env.action_space
+        Box(-0.5, [0.   0.5  1.   0.75], (4,), float32)
+        >>> RescaleAction(env, min_action, max_action).action_space == gym.spaces.Box(min_action, max_action)
+        True
+    """
+
+    def __init__(
+        self,
+        env: gym.Env,
+        min_action: Union[float, int, np.ndarray ,chex.Array],
+        max_action: Union[float, int, np.ndarray,chex.Array],
+        array : Callable
+    ):
+        """Initializes the :class:`RescaleAction` wrapper.
+
+        Args:
+            env (Env): The environment to apply the wrapper
+            min_action (float, int or np.ndarray): The min values for each action. This may be a numpy array or a scalar.
+            max_action (float, int or np.ndarray): The max values for each action. This may be a numpy array or a scalar.
+        """
+        assert isinstance(
+            env.action_space, spaces.Box
+        ), f"expected Box action space, got {type(env.action_space)}"
+        assert (min_action < max_action).all(), (min_action, max_action)
+
+        super().__init__(env)
+        self.min_action = (
+            np.zeros(env.action_space.shape, dtype=env.action_space.dtype) + min_action
+        )
+        self.max_action = (
+            np.zeros(env.action_space.shape, dtype=env.action_space.dtype) + max_action
+        )
+        self.action_space = spaces.Box(
+            low=min_action,
+            high=max_action,
+            shape=env.action_space.shape,
+            dtype=env.action_space.dtype,
+        )
+
+    def action(self, action):
+        """Rescales the action affinely from  [:attr:`min_action`, :attr:`max_action`] to the action space of the base environment, :attr:`env`.
+
+        Args:
+            action: The action to rescale
+
+        Returns:
+            The rescaled action
+        """
+        assert (action>= self.min_action).all(), (
+            action,
+            self.min_action,
+        )
+        assert (action <= self.max_action).all(), (action, self.max_action)
+        low = self.env.action_space.low
+        high = self.env.action_space.high
+        action = low + (high - low) * (
+            (action - self.min_action) / (self.max_action - self.min_action)
+        )
+        action = np.clip(action, low, high)
+        return action
+    
