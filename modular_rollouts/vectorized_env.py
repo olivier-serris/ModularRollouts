@@ -187,7 +187,7 @@ class OOP_VecEnv(VectorEnvWrapper):
                 seed=self.seed,
                 **kwargs,
             )
-        obs, info = env.reset()
+        obs, info = env.reset(seed=self.seed)
         obs_type = get_obs_type(obs)
         if self.n_pop > 1:
             in_shape = [self.n_pop * self.n_env] + list(env.single_action_space.shape)
